@@ -71,3 +71,12 @@ env/
 
 # odoo data folder
 .data
+
+# uv
+uv.lock
+build/
+dist/
+*.egg-info/
+
+# build-dist scripts
+opm-dist-*

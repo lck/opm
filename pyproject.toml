@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo-devops-tools"
+version = "1.0.1"
+description = "A set of DevOps tools for Odoo deployments and local dev."
+readme = "README.md"
+license = "MIT"
+license-files = [ "LICENSE" ]
+requires-python = ">=3.9"
+authors = [
+  { name = "Roman Lacko" },
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Framework :: Odoo",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/lck/odoo-devops-tools"
+Repository = "https://github.com/lck/odoo-devops-tools"
+
+[project.scripts]
+odt-env = "odoo_devops_tools.env:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
