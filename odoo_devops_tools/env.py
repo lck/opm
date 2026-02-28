@@ -2,7 +2,7 @@
 """
 odt-env
 
-Provision and sync a reproducible Odoo workspace from an INI configuration file
+Provision an Odoo workspace from a single project file
 """
 
 from __future__ import annotations
@@ -44,8 +44,20 @@ class RepoSpec:
     repo: str
     branch: str
     # If True, keep repo as a shallow, single-branch clone (depth=1).
-    # If False (default), do a full clone/fetch.
-    shallow_clone: bool = False
+    # If False, do a full clone/fetch.
+    shallow: bool = True
+
+
+@dataclass(frozen=True)
+class AddonSpec:
+    repo: Optional[str] = None
+    branch: Optional[str] = None
+    path: Optional[str] = None
+    shallow: bool = True
+
+    @property
+    def is_local(self) -> bool:
+        return bool((self.path or "").strip())
 
 
 @dataclass(frozen=True)
@@ -61,7 +73,7 @@ class VirtualenvConfig:
 class ProjectConfig:
     virtualenv: VirtualenvConfig
     odoo: RepoSpec
-    addons: Dict[str, RepoSpec]
+    addons: Dict[str, AddonSpec]
     config: Dict[str, Any]
 
 
@@ -76,25 +88,6 @@ class Layout:
     data_dir: Path
     scripts_dir: Path
     wheelhouse_dir: Path
-    run_sh: Path
-    instance_sh: Path
-    run_bat: Path
-    test_sh: Path
-    test_bat: Path
-    shell_sh: Path
-    shell_bat: Path
-    initdb_sh: Path
-    initdb_bat: Path
-    update_sh: Path
-    update_bat: Path
-    update_all_sh: Path
-    update_all_bat: Path
-    backup_sh: Path
-    backup_bat: Path
-    restore_sh: Path
-    restore_bat: Path
-    restore_force_sh: Path
-    restore_force_bat: Path
 
     @staticmethod
     def from_root(root: Path) -> "Layout":
@@ -106,25 +99,6 @@ class Layout:
         data_dir = root / "odoo-data"
         scripts_dir = root / "odoo-scripts"
         wheelhouse_dir = root / "wheelhouse"
-        run_sh = scripts_dir / "run.sh"
-        instance_sh = scripts_dir / "instance.sh"
-        run_bat = scripts_dir / "run.bat"
-        test_sh = scripts_dir / "test.sh"
-        test_bat = scripts_dir / "test.bat"
-        shell_sh = scripts_dir / "shell.sh"
-        shell_bat = scripts_dir / "shell.bat"
-        initdb_sh = scripts_dir / "initdb.sh"
-        initdb_bat = scripts_dir / "initdb.bat"
-        update_sh = scripts_dir / "update.sh"
-        update_bat = scripts_dir / "update.bat"
-        update_all_sh = scripts_dir / "update_all.sh"
-        update_all_bat = scripts_dir / "update_all.bat"
-        backup_sh = scripts_dir / "backup.sh"
-        backup_bat = scripts_dir / "backup.bat"
-        restore_sh = scripts_dir / "restore.sh"
-        restore_bat = scripts_dir / "restore.bat"
-        restore_force_sh = scripts_dir / "restore_force.sh"
-        restore_force_bat = scripts_dir / "restore_force.bat"
         return Layout(
             root=root,
             odoo_dir=odoo_dir,
@@ -135,26 +109,10 @@ class Layout:
             data_dir=data_dir,
             scripts_dir=scripts_dir,
             wheelhouse_dir=wheelhouse_dir,
-            run_sh=run_sh,
-            instance_sh=instance_sh,
-            run_bat=run_bat,
-            test_sh=test_sh,
-            test_bat=test_bat,
-            shell_sh=shell_sh,
-            shell_bat=shell_bat,
-            initdb_sh=initdb_sh,
-            initdb_bat=initdb_bat,
-            update_sh=update_sh,
-            update_bat=update_bat,
-            update_all_sh=update_all_sh,
-            update_all_bat=update_all_bat,
-            backup_sh=backup_sh,
-            backup_bat=backup_bat,
-            restore_sh=restore_sh,
-            restore_bat=restore_bat,
-            restore_force_sh=restore_force_sh,
-            restore_force_bat=restore_force_bat,
         )
+
+    def script(self, name: str, ext: str) -> Path:
+        return self.scripts_dir / f"{name}.{ext}"
 
 
 # -----------------------------
@@ -240,139 +198,26 @@ def _ini_for_audit_log(cp: configparser.ConfigParser) -> str:
 
 
 # -----------------------------
-# Include support
+# INI loading
 # -----------------------------
 
-_INCLUDE_SECTION = "include"
-_INCLUDE_OPTION = "files"
-
-
-def _split_ini_list(value: str) -> list[str]:
-    """Split a multi-line and/or comma-separated INI value into a list of tokens."""
-    parts: list[str] = []
-    for ln in (value or "").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        for chunk in ln.split(","):
-            chunk = chunk.strip()
-            if chunk:
-                parts.append(chunk)
-    return parts
-
-
-def _expand_include_token(token: str, runtime_vars: Optional[Dict[str, str]]) -> str:
-    """Expand runtime vars like ${ini_dir} in include paths (does NOT evaluate ${section:option})."""
-    s = token
-    if runtime_vars:
-        for k, v in runtime_vars.items():
-            if v is None:
-                continue
-            s = s.replace(f"${{{k}}}", str(v))
-    return os.path.expandvars(s)
-
-
-def _read_ini_with_includes(
-        entry_ini: Path,
-        runtime_vars: Optional[Dict[str, str]] = None,
-) -> tuple[configparser.ConfigParser, list[Path]]:
-    """
-    Read an INI config with a lightweight include mechanism:
-
-      [include]
-      files =
-        base.ini
-        ?local.ini
-
-    Rules:
-      - Paths are resolved relative to the INI that declares the include.
-      - Included files are loaded first; the including file overrides them.
-      - Prefix a path with '?' to make it optional (missing => skipped).
-      - Cycles are detected and reported.
-    """
+def _read_ini(entry_ini: Path) -> configparser.ConfigParser:
     cp = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
-    loaded_order: list[Path] = []
-    loaded: set[Path] = set()
-    stack: list[Path] = []
-
-    def _resolve_token(token: str, base_dir: Path) -> tuple[Path, bool]:
-        raw = (token or "").strip()
-        optional = raw.startswith("?")
-        if optional:
-            raw = raw[1:].strip()
-
-        raw = _expand_include_token(raw, runtime_vars=runtime_vars)
-        p = Path(raw).expanduser()
-        if not p.is_absolute():
-            p = (base_dir / p).resolve()
-        else:
-            p = p.resolve()
-        return p, optional
-
-    def _load_token(token: str, base_dir: Path) -> None:
-        p, optional = _resolve_token(token, base_dir=base_dir)
-
-        if p in loaded:
-            return
-        if p in stack:
-            cycle = " -> ".join([str(x) for x in stack] + [str(p)])
-            raise Exception(f"INI include cycle detected: {cycle}")
-
-        if not p.exists():
-            if optional:
-                _logger.info("Optional included INI not found (skipping): %s", p)
-                return
-            raise Exception(f"Included INI not found: {p}")
-        if not p.is_file():
-            raise Exception(f"Included INI path is not a file: {p}")
-
-        stack.append(p)
-
-        # Probe includes without interpolation to avoid requiring runtime/default vars at this stage.
-        probe = configparser.ConfigParser(interpolation=None)
-        probe.read(p, encoding="utf-8")
-
-        if probe.has_section(_INCLUDE_SECTION) and probe.has_option(_INCLUDE_SECTION, _INCLUDE_OPTION):
-            inc_raw = probe.get(_INCLUDE_SECTION, _INCLUDE_OPTION, fallback="")
-            for inc in _split_ini_list(inc_raw):
-                _load_token(inc, base_dir=p.parent)
-
-        stack.pop()
-
-        read_ok = cp.read(p, encoding="utf-8")
-        if not read_ok:
-            raise Exception(f"Failed to read INI config: {p}")
-        loaded.add(p)
-        loaded_order.append(p)
-
-    # Entry INI is required and loaded last (after its includes).
-    _load_token(str(entry_ini), base_dir=entry_ini.parent)
-
-    return cp, loaded_order
+    read_ok = cp.read(entry_ini, encoding="utf-8")
+    if not read_ok:
+        raise Exception(f"Failed to read INI config: {entry_ini}")
+    return cp
 
 
 def load_project_config(
         ini_path: Path,
-        runtime_vars: Optional[Dict[str, str]] = None,
-        include_runtime_vars: Optional[Dict[str, str]] = None,
 ) -> ProjectConfig:
     if not ini_path.exists():
         raise Exception(f"INI config not found: {ini_path}")
 
-    include_vars = include_runtime_vars if include_runtime_vars is not None else runtime_vars
-    cp, loaded_files = _read_ini_with_includes(ini_path, runtime_vars=include_vars)
+    cp = _read_ini(ini_path)
 
-    # Inject runtime variables into DEFAULT so ${root_dir} etc. work with ExtendedInterpolation.
-    # NOTE: interpolation is resolved on access (cp.get / cp.items), so it is safe to set these
-    # after cp.read() but before we access options.
-    if runtime_vars:
-        for k, v in runtime_vars.items():
-            if v is None:
-                continue
-            cp["DEFAULT"][str(k)] = str(v)
-
-    loaded_label = "\n".join([f"  - {p}" for p in loaded_files])
-    _logger.info("Loaded INI stack (resolved) from %s:\n%s\n\nMerged INI (resolved):\n%s", ini_path, loaded_label, _ini_for_audit_log(cp))
+    _logger.info("Loaded INI (resolved) from %s:\n%s", ini_path, _ini_for_audit_log(cp))
 
     def _require_option(section: str, option: str) -> str:
         if not cp.has_section(section):
@@ -422,25 +267,51 @@ def load_project_config(
     odoo = RepoSpec(
         repo=_require_option("odoo", "repo"),
         branch=_require_option("odoo", "branch"),
-        shallow_clone=_get_bool("odoo", "shallow_clone", default=False),
+        shallow=_get_bool("odoo", "shallow", default=True),
     )
 
     # Addons are optional. If there are no [addons.<name>] sections, keep addons empty.
-    addons: Dict[str, RepoSpec] = {}
+    addons: Dict[str, AddonSpec] = {}
     for sec in cp.sections():
         if sec.startswith("addons."):
             name = sec.split(".", 1)[1]
-            addons[name] = RepoSpec(
+
+            has_path = cp.has_option(sec, "path")
+            has_repo = cp.has_option(sec, "repo")
+            has_branch = cp.has_option(sec, "branch")
+            has_shallow = cp.has_option(sec, "shallow")
+
+            path_value = cp.get(sec, "path", fallback="").strip() if has_path else ""
+            if has_path:
+                if not path_value:
+                    raise Exception(
+                        f"Invalid option 'path' in section [{sec}] (expected non-empty string)."
+                    )
+                if has_repo or has_branch or has_shallow:
+                    raise Exception(
+                        f"Invalid addon source in section [{sec}]: "
+                        "use either 'path' only for a local addon, or 'repo' + 'branch' "
+                        "(+ optional 'shallow') for a git addon."
+                    )
+                addons[name] = AddonSpec(path=path_value)
+                continue
+
+            addons[name] = AddonSpec(
                 repo=_require_option(sec, "repo"),
                 branch=_require_option(sec, "branch"),
-                shallow_clone=_get_bool(sec, "shallow_clone", default=False),
+                shallow=_get_bool(sec, "shallow", default=True),
             )
 
     if not cp.has_section("config"):
         raise Exception("Missing INI section: [config]")
     config: Dict[str, Any] = {}
-    # Only include keys explicitly defined in [config] (exclude DEFAULT/runtime vars).
+    # Only include keys explicitly defined in [config] (exclude DEFAULT values).
     for key in cp._sections.get("config", {}).keys():
+        if key == "addons_path":
+            raise Exception(
+                "Option 'addons_path' in section [config] is not allowed. "
+                "addons_path is always generated automatically; add addons only via [addons.<name>] sections."
+            )
         config[key] = cp.get("config", key)
 
     return ProjectConfig(virtualenv=venv, odoo=odoo, addons=addons, config=config)
@@ -1031,10 +902,6 @@ def checkout_branch(dest: Path, branch: str, fetch_all: bool = True, depth: Opti
 # Odoo config generation
 # -----------------------------
 
-def _join_addons_path(paths: Iterable[Path]) -> str:
-    return ",".join(str(p) for p in paths)
-
-
 def _format_conf_value(value: Any) -> str:
     # Render INI-parsed values into an Odoo .conf compatible scalar.
     if isinstance(value, bool):
@@ -1044,43 +911,48 @@ def _format_conf_value(value: Any) -> str:
     return str(value)
 
 
-def render_odoo_conf(cfg: Dict[str, Any], layout: Layout, addon_paths: list[Path]) -> str:
-    def _parse_addons_path_value(raw: str) -> list[str]:
-        # Support either comma-separated or multi-line values.
-        parts: list[str] = []
-        for ln in raw.splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
-            for chunk in ln.split(","):
-                chunk = chunk.strip()
-                if chunk:
-                    parts.append(chunk)
-        return parts
+def _resolve_addon_path(layout: Layout, addon_name: str, spec: AddonSpec) -> Path:
+    if spec.is_local:
+        addon_path = Path((spec.path or "").strip()).expanduser()
+        if not addon_path.is_absolute():
+            addon_path = layout.root / addon_path
+        try:
+            return addon_path.resolve()
+        except Exception:
+            return addon_path.absolute()
 
+    return layout.addons_root / addon_name
+
+
+def _validate_local_addon_path(layout: Layout, addon_name: str, spec: AddonSpec) -> Path:
+    """Validate one local addon path lazily, right before that addon is processed."""
+    addon_path = _resolve_addon_path(layout, addon_name, spec)
+
+    if not spec.is_local:
+        return addon_path
+
+    if not addon_path.exists():
+        raise Exception(
+            f"Local addon path for [addons.{addon_name}] does not exist: {addon_path}"
+        )
+    if not addon_path.is_dir():
+        raise Exception(
+            f"Local addon path for [addons.{addon_name}] is not a directory: {addon_path}"
+        )
+
+    return addon_path
+
+
+def render_odoo_conf(cfg: Dict[str, Any], layout: Layout, addon_paths: list[Path]) -> str:
     odoo_addons_candidates = [
         layout.odoo_dir / "addons",
         layout.odoo_dir / "odoo" / "addons",
     ]
 
-    # Base addons_path always includes Odoo's addons plus every synced addon repository.
-    base_paths: list[Path] = [*odoo_addons_candidates, *addon_paths]
-
-    # Extra addons_path entries from INI should EXTEND (append to) the computed base.
-    extra_paths: list[Path] = []
-    user_addons_raw = cfg.get("addons_path")
-    if isinstance(user_addons_raw, str) and user_addons_raw.strip():
-        for token in _parse_addons_path_value(user_addons_raw):
-            p = Path(token).expanduser()
-            if not p.is_absolute():
-                p = (layout.root / p).resolve()
-            else:
-                p = p.resolve()
-            extra_paths.append(p)
-
+    # addons_path is always generated from Odoo core addons + every configured [addons.<name>] source.
     merged: list[str] = []
     seen: set[str] = set()
-    for p in [*base_paths, *extra_paths]:
+    for p in [*odoo_addons_candidates, *addon_paths]:
         s = str(p)
         if s in seen:
             continue
@@ -1090,13 +962,13 @@ def render_odoo_conf(cfg: Dict[str, Any], layout: Layout, addon_paths: list[Path
 
     lines: list[str] = ["[options]"]
 
-    # Write every key from [config] (dynamic; no fixed schema), but treat addons_path specially.
+    # Write every key from [config] (dynamic; no fixed schema), except values generated by odt-env.
     for key, value in cfg.items():
-        if key in ("addons_path", "data_dir"):
+        if key == "data_dir":
             continue
         lines.append(f"{key} = {_format_conf_value(value)}")
 
-    # Always write merged addons_path.
+    # Always write generated addons_path.
     lines.append(f"addons_path = {merged_addons_path}")
 
     # Always write data_dir from layout
@@ -1139,11 +1011,11 @@ echo "INFO: Starting Odoo server using config ${CONF}. Passing through any extra
 exec "${PY}" "${ODOO_BIN}" -c "${CONF}" "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.run_sh.write_text(content, encoding="utf-8")
+    layout.script("run", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.run_sh.stat().st_mode
-        layout.run_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("run", "sh").stat().st_mode
+        layout.script("run", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1281,11 +1153,11 @@ case "${cmd}" in
 esac
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.instance_sh.write_text(content, encoding="utf-8")
+    layout.script("instance", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.instance_sh.stat().st_mode
-        layout.instance_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("instance", "sh").stat().st_mode
+        layout.script("instance", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1323,7 +1195,7 @@ echo INFO: Starting Odoo server using config %CONF%. Passing through any extra a
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.run_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("run", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_test_sh(layout: Layout) -> None:
@@ -1356,11 +1228,11 @@ echo "INFO: Running Odoo tests using config ${CONF}. Passing through any extra a
 exec "${PY}" "${ODOO_BIN}" -c "${CONF}" --test-enable --stop-after-init "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.test_sh.write_text(content, encoding="utf-8")
+    layout.script("test", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.test_sh.stat().st_mode
-        layout.test_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("test", "sh").stat().st_mode
+        layout.script("test", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1398,7 +1270,7 @@ echo INFO: Running Odoo tests using config %CONF%. Passing through any extra arg
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.test_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("test", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_shell_sh(layout: Layout) -> None:
@@ -1431,11 +1303,11 @@ echo "INFO: Starting Odoo shell using config ${CONF}. Passing through any extra 
 exec "${PY}" "${ODOO_BIN}" shell -c "${CONF}" "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.shell_sh.write_text(content, encoding="utf-8")
+    layout.script("shell", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.shell_sh.stat().st_mode
-        layout.shell_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("shell", "sh").stat().st_mode
+        layout.script("shell", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1473,7 +1345,7 @@ echo INFO: Starting Odoo shell using config %CONF%. Passing through any extra ar
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.shell_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("shell", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_initdb_sh(layout: Layout, db_name: str) -> None:
@@ -1505,11 +1377,11 @@ echo "INFO: Initializing Odoo database '{db_name}' (unless exists; no demo; no c
 exec "${{INITDB_BIN}}" -c "${{CONF}}" --no-demo --no-cache --unless-exists --log-level debug -n "{db_name}" "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.initdb_sh.write_text(content, encoding="utf-8")
+    layout.script("initdb", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.initdb_sh.stat().st_mode
-        layout.initdb_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("initdb", "sh").stat().st_mode
+        layout.script("initdb", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1546,7 +1418,7 @@ echo INFO: Initializing Odoo database "{db_name}" (unless exists; no demo; no ca
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.initdb_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("initdb", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_backup_sh(layout: Layout, db_name: str) -> None:
@@ -1588,11 +1460,11 @@ echo "INFO: Creating new backup '${{FULL_BACKUP_PATH}}' using config ${{CONF}}. 
 exec "${{BACKUP_BIN}}" -c "${{CONF}}" --format zip "{db_name}" "${{FULL_BACKUP_PATH}}" --log-level debug "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.backup_sh.write_text(content, encoding="utf-8")
+    layout.script("backup", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.backup_sh.stat().st_mode
-        layout.backup_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("backup", "sh").stat().st_mode
+        layout.script("backup", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1641,7 +1513,7 @@ echo INFO: Creating new backup "%FULL_BACKUP_PATH%" using config %CONF%. Passing
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.backup_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("backup", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_restore_sh(layout: Layout, db_name: str) -> None:
@@ -1679,11 +1551,11 @@ echo "INFO: Restoring Odoo database '{db_name}' using config ${{CONF}}. Passing 
 exec "${{RESTORE_BIN}}" -c "${{CONF}}" --copy --neutralize --log-level debug "{db_name}" "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.restore_sh.write_text(content, encoding="utf-8")
+    layout.script("restore", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.restore_sh.stat().st_mode
-        layout.restore_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("restore", "sh").stat().st_mode
+        layout.script("restore", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1726,7 +1598,7 @@ echo INFO: Restoring Odoo database "{db_name}" using config %CONF%. Passing thro
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.restore_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("restore", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_restore_force_sh(layout: Layout, db_name: str) -> None:
@@ -1764,11 +1636,11 @@ echo "INFO: Restoring Odoo database '{db_name}' using config ${{CONF}}. Passing 
 exec "${{RESTORE_BIN}}" -c "${{CONF}}" --copy --neutralize --force --log-level debug "{db_name}" "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.restore_force_sh.write_text(content, encoding="utf-8")
+    layout.script("restore_force", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.restore_force_sh.stat().st_mode
-        layout.restore_force_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("restore_force", "sh").stat().st_mode
+        layout.script("restore_force", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1811,7 +1683,7 @@ echo INFO: Restoring Odoo database "{db_name}" using config %CONF%. Passing thro
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.restore_force_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("restore_force", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_update_sh(layout: Layout) -> None:
@@ -1843,11 +1715,11 @@ echo "INFO: Updating Odoo addons using config ${{CONF}}. Passing through any ext
 exec "${{UPDATE_BIN}}" -c "${{CONF}}" --log-level debug "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.update_sh.write_text(content, encoding="utf-8")
+    layout.script("update", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.update_sh.stat().st_mode
-        layout.update_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("update", "sh").stat().st_mode
+        layout.script("update", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1884,7 +1756,7 @@ echo INFO: Updating Odoo addons using config %CONF%. Passing through any extra a
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.update_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("update", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 def write_update_all_sh(layout: Layout) -> None:
@@ -1916,11 +1788,11 @@ echo "INFO: Updating all Odoo addons using config ${{CONF}}. Passing through any
 exec "${{UPDATE_BIN}}" -c "${{CONF}}" --update-all --log-level debug "$@"
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.update_all_sh.write_text(content, encoding="utf-8")
+    layout.script("update_all", "sh").write_text(content, encoding="utf-8")
 
     try:
-        mode = layout.update_all_sh.stat().st_mode
-        layout.update_all_sh.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        mode = layout.script("update_all", "sh").stat().st_mode
+        layout.script("update_all", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
 
@@ -1957,7 +1829,7 @@ echo INFO: Updating Odoo addons using config %CONF%. Passing through any extra a
 endlocal
 """
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.update_all_bat.write_text(content.replace("\n", "\r\n"), encoding="utf-8")
+    layout.script("update_all", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
 # -----------------------------
@@ -1969,11 +1841,8 @@ def sync_project(
         sync_odoo: bool,
         sync_addons: bool,
         root_override: Optional[Path] = None,
-        dest_root_override: Optional[Path] = None,
-        create_wheelhouse: bool = False,
         reuse_wheelhouse: bool = False,
         create_venv: bool = False,
-        rebuild_venv: bool = False,
         clear_pip_wheel_cache: bool = False,
         no_configs: bool = False,
         no_scripts: bool = False,
@@ -1982,96 +1851,37 @@ def sync_project(
     root = (root_override or ini_path.parent).resolve()
     if root.exists() and not root.is_dir():
         raise Exception(f"ROOT exists but is not a directory: {root}")
-
-    # dest_root is used only for paths embedded in generated configs/scripts.
-    # It does NOT need to exist on the build system.
-    if dest_root_override is None:
-        dest_root = root
-    else:
-        candidate = Path(dest_root_override).expanduser()
-        if not candidate.is_absolute():
-            # Interpret relative dest roots relative to the workspace ROOT for stability.
-            candidate = root / candidate
-        try:
-            dest_root = candidate.resolve()
-        except Exception:
-            dest_root = candidate.absolute()
-
     layout = Layout.from_root(root)
-    dest_layout = Layout.from_root(dest_root)
 
-    # Runtime variables for INI evaluation:
-    # - FS vars: used for repo/venv operations and include resolution (must exist on build host)
-    # - DEST vars: used for [config] interpolation (paths embedded into generated files)
-    fs_runtime_vars = {
-        # Common workspace (filesystem) paths
-        "ini_dir": str(ini_path.parent.resolve()),
-        "root_dir": str(layout.root),
-        "odoo_dir": str(layout.odoo_dir),
-        "addons_dir": str(layout.addons_root),
-        "backups_dir": str(layout.backups_dir),
-        "configs_dir": str(layout.configs_dir),
-        "config_path": str(layout.conf_path),
-        "scripts_dir": str(layout.scripts_dir),
-        "venv_python": str((layout.root / "venv") / ("Scripts/python.exe" if sys.platform.startswith("win") else "bin/python")),
-    }
-    dest_runtime_vars = {
-        # Destination (deployment) paths
-        "ini_dir": str(ini_path.parent.resolve()),
-        "root_dir": str(dest_layout.root),
-        "odoo_dir": str(dest_layout.odoo_dir),
-        "addons_dir": str(dest_layout.addons_root),
-        "backups_dir": str(dest_layout.backups_dir),
-        "configs_dir": str(dest_layout.configs_dir),
-        "config_path": str(dest_layout.conf_path),
-        "scripts_dir": str(dest_layout.scripts_dir),
-        "venv_python": str((dest_layout.root / "venv") / ("Scripts/python.exe" if sys.platform.startswith("win") else "bin/python")),
-    }
+    cfg = load_project_config(ini_path)
 
-    # Load config twice: filesystem vars for repos/venv, and destination vars for the [config] section.
-    cfg_fs = load_project_config(ini_path, runtime_vars=fs_runtime_vars, include_runtime_vars=fs_runtime_vars)
-    cfg_dest = load_project_config(ini_path, runtime_vars=dest_runtime_vars, include_runtime_vars=fs_runtime_vars)
-    cfg = ProjectConfig(
-        virtualenv=cfg_fs.virtualenv,
-        odoo=cfg_fs.odoo,
-        addons=cfg_fs.addons,
-        config=cfg_dest.config,
-    )
-
-    # If user overrides "data_dir" via [config] section, propagate changes to dest_layout->data_dir.
+    # If user overrides "data_dir" via [config] section, propagate changes to layout->data_dir.
     if "data_dir" in cfg.config:
         cfg_data_dir_raw = cfg.config.get("data_dir")
         cfg_data_dir_path = Path(cfg_data_dir_raw.strip()).expanduser()
         if not cfg_data_dir_path.is_absolute():
-            cfg_data_dir_path = dest_layout.root / cfg_data_dir_path
+            cfg_data_dir_path = layout.root / cfg_data_dir_path
         try:
             cfg_data_dir = cfg_data_dir_path.resolve()
         except Exception:
             cfg_data_dir = cfg_data_dir_path.absolute()
-        _logger.warning(f"data_dir override via [config] section: from={dest_layout.data_dir}, to={cfg_data_dir}")
-        dest_layout = replace(dest_layout, data_dir=cfg_data_dir)
+        _logger.warning(f"data_dir override via [config] section: from={layout.data_dir}, to={cfg_data_dir}")
+        layout = replace(layout, data_dir=cfg_data_dir)
 
     # We optionally create/ensure the venv early so we can use its Python for `uv pip compile` / installs.
     venv_py: Optional[Path] = None
-    venv_enabled = create_venv or rebuild_venv
 
-    # Validate combinations (defensive; CLI also enforces these).
-    if reuse_wheelhouse and not venv_enabled:
-        raise Exception("--reuse-wheelhouse requires --create-venv (or --rebuild-venv).")
-    if create_wheelhouse and reuse_wheelhouse:
-        raise Exception('--create-wheelhouse can not be used with --reuse-wheelhouse')
-
-    if venv_enabled or create_wheelhouse:
+    if create_venv:
         venv_dir = layout.root / "venv"
 
-        if (rebuild_venv or create_wheelhouse) and venv_dir.exists():
-            _logger.info("Rebuilding venv: removing %s", venv_dir)
+        if venv_dir.exists():
+            _logger.info("Recreating venv: removing %s", venv_dir)
             _rmtree(venv_dir)
 
         # Wheelhouse handling: either reuse, or rebuild from scratch.
         if reuse_wheelhouse:
             if not layout.wheelhouse_dir.exists() or not layout.wheelhouse_dir.is_dir():
-                raise Exception(f"--reuse-wheelhouse set but wheelhouse dir not found: {layout.wheelhouse_dir}")
+                raise Exception(f"--create-venv-from-wheelhouse set but wheelhouse dir not found: {layout.wheelhouse_dir}")
         else:
             if layout.wheelhouse_dir.exists():
                 _logger.info("Rebuilding wheelhouse: removing %s", layout.wheelhouse_dir)
@@ -2091,15 +1901,15 @@ def sync_project(
 
         if reuse_wheelhouse and (sync_odoo or sync_addons):
             _logger.warning(
-                "--reuse-wheelhouse is set together with repo sync targets; "
+                "--create-venv-from-wheelhouse is set together with repo sync targets; "
                 "dependency lock/wheelhouse rebuild will be skipped. "
-                "If requirements changed, re-run without --reuse-wheelhouse."
+                "If requirements changed, re-run without --create-venv-from-wheelhouse."
             )
     else:
         if sync_odoo or sync_addons:
             _logger.info(
                 "Repo sync selected, but venv/wheelhouse provisioning is disabled; "
-                "skipping venv/wheelhouse. Use --create-venv or --create-wheelhouse to enable."
+                "skipping venv/wheelhouse. Use --create-venv to enable."
             )
         else:
             _logger.info(
@@ -2111,14 +1921,14 @@ def sync_project(
     layout.scripts_dir.mkdir(parents=True, exist_ok=True)
     layout.backups_dir.mkdir(parents=True, exist_ok=True)
     if not no_data_dir:
-        dest_layout.data_dir.mkdir(parents=True, exist_ok=True)
+        layout.data_dir.mkdir(parents=True, exist_ok=True)
 
     # Sync repositories first, collect all requirements, then compile + install once.
     req_files: list[Path] = []
 
     if sync_odoo:
-        if cfg.odoo.shallow_clone:
-            # Shallow + single branch (enabled only when [odoo] shallow_clone=true).
+        if cfg.odoo.shallow:
+            # Shallow + single branch (default; disable with [odoo] shallow=false).
             ensure_repo(
                 cfg.odoo.repo,
                 layout.odoo_dir,
@@ -2129,7 +1939,7 @@ def sync_project(
             )
             checkout_branch(layout.odoo_dir, cfg.odoo.branch, fetch_all=False, depth=1)
         else:
-            # Full clone/fetch (default).
+            # Full clone/fetch.
             ensure_repo(
                 cfg.odoo.repo,
                 layout.odoo_dir,
@@ -2155,10 +1965,16 @@ def sync_project(
         if not cfg.addons:
             _logger.info("No [addons.*] sections configured; skipping addons sync.")
         for addon_name, spec in cfg.addons.items():
-            dest = layout.addons_root / addon_name
+            dest = _validate_local_addon_path(layout, addon_name, spec)
 
-            if spec.shallow_clone:
-                # Shallow + single branch (enabled only when [addons.<name>] shallow_clone=true).
+            if spec.is_local:
+                _logger.info(
+                    "Using local addon path for [%s]: %s (skipping git sync)",
+                    addon_name,
+                    dest,
+                )
+            elif spec.shallow:
+                # Shallow + single branch (default; disable with [addons.<name>] shallow=false).
                 ensure_repo(
                     spec.repo,
                     dest,
@@ -2169,7 +1985,7 @@ def sync_project(
                 )
                 checkout_branch(dest, spec.branch, fetch_all=False, depth=1)
             else:
-                # Full clone/fetch (default).
+                # Full clone/fetch.
                 ensure_repo(
                     spec.repo,
                     dest,
@@ -2186,14 +2002,14 @@ def sync_project(
     else:
         # If we're provisioning python but not syncing repos, use existing addon requirements (if present).
         if venv_py is not None and cfg.addons:
-            for addon_name in cfg.addons.keys():
-                dest = layout.addons_root / addon_name
+            for addon_name, spec in cfg.addons.items():
+                dest = _validate_local_addon_path(layout, addon_name, spec)
                 addon_req = dest / "requirements.txt"
                 if addon_req.exists():
                     req_files.append(addon_req)
 
     # Compile and install a single lock file from all synced repos + base requirements.
-    # In --reuse-wheelhouse mode we skip compilation + wheel build and only install offline from existing lock/wheels.
+    # In --create-venv-from-wheelhouse mode we skip compilation + wheel build and only install offline from existing lock/wheels.
     if venv_py is not None:
         # The generated scripts assume ROOT/odoo exists.
         if not layout.odoo_dir.exists() or not layout.odoo_dir.is_dir():
@@ -2214,13 +2030,13 @@ def sync_project(
 
             if not lock_path.exists():
                 raise Exception(
-                    f"--reuse-wheelhouse set but lock file not found: {lock_path} "
+                    f"--create-venv-from-wheelhouse set but lock file not found: {lock_path} "
                     "(expected existing wheelhouse from a previous run)"
                 )
 
             if cfg.virtualenv.build_constraints and not build_constraints_path.is_file():
                 raise Exception(
-                    f"--reuse-wheelhouse and build_constraints set in INI but build_constraints file not found: {build_constraints_path} "
+                    f"--create-venv-from-wheelhouse and build_constraints set in INI but build_constraints file not found: {build_constraints_path} "
                     "(expected existing wheelhouse from a previous run)"
                 )
 
@@ -2265,7 +2081,7 @@ def sync_project(
                 clear_pip_wheel_cache=clear_pip_wheel_cache,
             )
 
-            if venv_enabled:
+            if create_venv:
                 pip_install_requirements_file(
                     venv_python=venv_py,
                     workspace_root=layout.root,
@@ -2273,7 +2089,7 @@ def sync_project(
                     requirements_path=lock_path,
                 )
 
-        if venv_enabled:
+        if create_venv:
             # Install Odoo itself in editable mode (so local source changes are reflected).
             _logger.info("Installing Odoo in editable mode: %s", layout.odoo_dir)
             cmd = [
@@ -2296,8 +2112,11 @@ def sync_project(
 
     # Generate config (unless disabled).
     if not no_configs:
-        addon_paths: list[Path] = [dest_layout.addons_root / name for name in cfg.addons.keys()]
-        conf_text = render_odoo_conf(cfg.config, dest_layout, addon_paths)
+        addon_paths: list[Path] = [
+            _validate_local_addon_path(layout, addon_name, spec)
+            for addon_name, spec in cfg.addons.items()
+        ]
+        conf_text = render_odoo_conf(cfg.config, layout, addon_paths)
         layout.conf_path.write_text(conf_text, encoding="utf-8")
     else:
         _logger.info("Skipping config generation (--no-configs).")
@@ -2364,15 +2183,13 @@ def sync_project(
 
     print(f"  Synced:             {synced_label}")
     print(f"  ROOT:               {layout.root}")
-    if dest_layout.root != layout.root:
-        print(f"  DEST_ROOT:          {dest_layout.root}")
     print(f"  Odoo:               {layout.odoo_dir}")
     print(f"  Addons:             {layout.addons_root}")
     print(f"  Backups:            {layout.backups_dir}")
     if no_data_dir:
         print(f"  Data:               SKIPPED (--no-data-dir)")
     else:
-        print(f"  Data:               {dest_layout.data_dir}")
+        print(f"  Data:               {layout.data_dir}")
     if no_configs:
         print(f"  Config:             SKIPPED (--no-configs) [{layout.conf_path}]")
     else:
@@ -2393,25 +2210,25 @@ def sync_project(
     else:
         print(f"  Scripts:")
         if is_windows:
-            print(f"  - run:              {layout.run_bat}")
-            print(f"  - test:             {layout.test_bat}")
-            print(f"  - shell:            {layout.shell_bat}")
-            print(f"  - initdb:           {layout.initdb_bat}")
-            print(f"  - backup:           {layout.backup_bat}")
-            print(f"  - restore:          {layout.restore_bat}")
-            print(f"  - restore_force:    {layout.restore_force_bat}")
-            print(f"  - update:           {layout.update_bat}")
-            print(f"  - update-all:       {layout.update_all_bat}")
+            print(f"  - run:              {layout.script("run", "bat")}")
+            print(f"  - test:             {layout.script("test", "bat")}")
+            print(f"  - shell:            {layout.script("shell", "bat")}")
+            print(f"  - initdb:           {layout.script("initdb", "bat")}")
+            print(f"  - backup:           {layout.script("backup", "bat")}")
+            print(f"  - restore:          {layout.script("restore", "bat")}")
+            print(f"  - restore_force:    {layout.script("restore_force", "bat")}")
+            print(f"  - update:           {layout.script("update", "bat")}")
+            print(f"  - update-all:       {layout.script("update_all", "bat")}")
         else:
-            print(f"  - run:              {layout.run_sh}")
-            print(f"  - test:             {layout.test_sh}")
-            print(f"  - shell:            {layout.shell_sh}")
-            print(f"  - initdb:           {layout.initdb_sh}")
-            print(f"  - backup:           {layout.backup_sh}")
-            print(f"  - restore:          {layout.restore_sh}")
-            print(f"  - restore_force:    {layout.restore_force_sh}")
-            print(f"  - update:           {layout.update_sh}")
-            print(f"  - update-all:       {layout.update_all_sh}")
+            print(f"  - run:              {layout.script("run", "sh")}")
+            print(f"  - test:             {layout.script("test", "sh")}")
+            print(f"  - shell:            {layout.script("shell", "sh")}")
+            print(f"  - initdb:           {layout.script("initdb", "sh")}")
+            print(f"  - backup:           {layout.script("backup", "sh")}")
+            print(f"  - restore:          {layout.script("restore", "sh")}")
+            print(f"  - restore_force:    {layout.script("restore_force", "sh")}")
+            print(f"  - update:           {layout.script("update", "sh")}")
+            print(f"  - update-all:       {layout.script("update_all", "sh")}")
 
 
 # -----------------------------
@@ -2424,14 +2241,11 @@ def build_parser() -> argparse.ArgumentParser:
 ROOT selection:
   By default, ROOT is the directory containing the INI.
   Use --root to override where the workspace (repos/venv/configs/scripts) is created.
-  Use --dest-root to override the ROOT path embedded into generated configs/scripts (deployment root).
 
 Examples:
   odt-env /path/to/odoo-project.ini --sync-all --create-venv
-  odt-env /path/to/odoo-project.ini --sync-all --create-wheelhouse
   odt-env /path/to/odoo-project.ini --sync-all --create-venv --root /path/to/workspace-root
-  odt-env /path/to/odoo-project.ini --rebuild-venv --reuse-wheelhouse
-  odt-env /path/to/odoo-project.ini --rebuild-venv --reuse-wheelhouse --root /path/to/workspace-root
+  odt-env /path/to/odoo-project.ini --create-venv-from-wheelhouse
 """
 
     parser = argparse.ArgumentParser(
@@ -2461,52 +2275,27 @@ Examples:
         help="Override workspace ROOT directory (default: directory containing INI).",
     )
 
-    parser.add_argument(
-        "--dest-root",
-        dest="dest_root",
-        metavar="DEST_ROOT",
-        default=None,
-        help=(
-            "Override DEST_ROOT used for paths embedded in generated configs/scripts. "
-            "This does not change where the workspace is created (see --root). "
-            "DEST_ROOT does not need to exist on the build machine. "
-            "Default: same as ROOT."
-        ),
-    )
-
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--sync-odoo", dest="odoo", action="store_true", help="Sync only Odoo repository")
     target.add_argument("--sync-addons", dest="addons", action="store_true", help="Sync only addon repositories")
     target.add_argument("--sync-all", dest="all", action="store_true", help="Sync Odoo + addons")
 
     parser.add_argument(
-        "--create-wheelhouse",
-        action="store_true",
-        help=(
-            "Create/refresh ROOT/wheelhouse (and all-requirements.lock.txt). "
-            "Ensures ROOT/venv exists so wheels can be built, but does NOT install project requirements into the venv "
-            "unless --create-venv/--rebuild-venv is also set."
-        ),
-    )
-    parser.add_argument(
         "--create-venv",
         action="store_true",
         help=(
-            "Enable virtualenv provisioning (create/update ROOT/venv + wheelhouse). "
-            "Without this flag, odt-env will not touch venv/wheelhouse."
+            "Enable virtualenv provisioning by recreating ROOT/venv and refreshing wheelhouse. "
+            "If ROOT/venv already exists, it is deleted and created again. "
+            "Without this flag, odt-env will not touch venv/wheelhouse. "
+            "Wheelhouse is always rebuilt together with --create-venv."
         ),
     )
     parser.add_argument(
-        "--rebuild-venv",
-        action="store_true",
-        help="Delete ROOT/venv and recreate it (implies --create-venv).",
-    )
-    parser.add_argument(
-        "--reuse-wheelhouse",
+        "--create-venv-from-wheelhouse",
         action="store_true",
         help=(
-            "Reuse existing ROOT/wheelhouse (and all-requirements.lock.txt) and install offline only. "
-            "Skips lock compilation and wheelhouse build. Requires --create-venv."
+            "Recreate ROOT/venv from existing ROOT/wheelhouse (and all-requirements.lock.txt) and install offline only. "
+            "Implies --create-venv and skips lock compilation and wheelhouse build."
         ),
     )
     parser.add_argument(
@@ -2579,17 +2368,12 @@ def main() -> None:
 
     args = parser.parse_args()
     clear_pip_wheel_cache = bool(getattr(args, 'clear_pip_wheel_cache', False))
-    reuse_wheelhouse = bool(getattr(args, 'reuse_wheelhouse', False))
-    rebuild_venv = bool(getattr(args, 'rebuild_venv', False))
-    create_venv = bool(getattr(args, 'create_venv', False)) or rebuild_venv
-    create_wheelhouse = bool(getattr(args, 'create_wheelhouse', False))
+    create_venv_from_wheelhouse = bool(getattr(args, 'create_venv_from_wheelhouse', False))
+    reuse_wheelhouse = create_venv_from_wheelhouse
+    create_venv = bool(getattr(args, 'create_venv', False)) or create_venv_from_wheelhouse
     no_configs = bool(getattr(args, 'no_configs', False))
     no_scripts = bool(getattr(args, 'no_scripts', False))
     no_data_dir = bool(getattr(args, 'no_data_dir', False))
-    if reuse_wheelhouse and not create_venv:
-        parser.error('--reuse-wheelhouse requires --create-venv (or --rebuild-venv)')
-    if create_wheelhouse and reuse_wheelhouse:
-        parser.error('--create-wheelhouse can not be used with --reuse-wheelhouse')
 
     ini_path = Path(args.ini).expanduser().resolve()
     if not ini_path.exists():
@@ -2603,11 +2387,6 @@ def main() -> None:
     else:
         _logger.info('Workspace ROOT default (INI directory): %s', ini_path.parent.resolve())
 
-    dest_root_override: Optional[Path] = None
-    if getattr(args, 'dest_root', None):
-        # NOTE: DEST_ROOT does not need to exist on this machine.
-        dest_root_override = Path(args.dest_root).expanduser()
-
     if args.all:
         sync_odoo, sync_addons = True, True
     elif args.odoo:
@@ -2619,21 +2398,22 @@ def main() -> None:
         sync_odoo, sync_addons = False, False
 
     ini_path = Path(args.ini).resolve()
-    sync_project(
-        ini_path,
-        sync_odoo=sync_odoo,
-        sync_addons=sync_addons,
-        root_override=root_override,
-        dest_root_override=dest_root_override,
-        create_wheelhouse=create_wheelhouse,
-        reuse_wheelhouse=reuse_wheelhouse,
-        create_venv=create_venv,
-        rebuild_venv=rebuild_venv,
-        clear_pip_wheel_cache=clear_pip_wheel_cache,
-        no_configs=no_configs,
-        no_scripts=no_scripts,
-        no_data_dir=no_data_dir,
-    )
+
+    try:
+        sync_project(
+            ini_path,
+            sync_odoo=sync_odoo,
+            sync_addons=sync_addons,
+            root_override=root_override,
+            reuse_wheelhouse=reuse_wheelhouse,
+            create_venv=create_venv,
+            clear_pip_wheel_cache=clear_pip_wheel_cache,
+            no_configs=no_configs,
+            no_scripts=no_scripts,
+            no_data_dir=no_data_dir,
+        )
+    except Exception as e:
+        _logger.error(f'{e}')
 
 
 if __name__ == "__main__":
