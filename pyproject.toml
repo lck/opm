@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "odoo-devops-tools"
-version = "1.3.0"
+version = "1.4.0"
 description = "A small set of DevOps utilities for local Odoo development and simple Odoo deployments."
 readme = "README.md"
 license = "MIT"
