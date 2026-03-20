@@ -109,6 +109,24 @@ jobs:
         working-directory: odoo-workspace
         run: ./odoo-scripts/initdb.sh -m web_notify,helpdesk_mgmt
 
+      - name: Verify OCA addons installed in database
+        env:
+          PGPASSWORD: odoo
+        run: |
+          psql -h 127.0.0.1 -U odoo -d odoo -c \
+            "SELECT name, state
+             FROM ir_module_module
+             WHERE name IN ('web_notify', 'helpdesk_mgmt')
+             ORDER BY name;"
+
+          missing="$(psql -h 127.0.0.1 -U odoo -d odoo -tAc \
+            "SELECT string_agg(name, ',')
+             FROM ir_module_module
+             WHERE name IN ('web_notify', 'helpdesk_mgmt')
+               AND state <> 'installed';")"
+
+          test -z "$missing"
+
       - name: Update addons
         working-directory: odoo-workspace
         run: ./odoo-scripts/update.sh
