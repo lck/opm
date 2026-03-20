@@ -1,4 +1,4 @@
-name: Test Create Workspace
+name: Test Create Workspace Minimal
 
 on:
   push:
@@ -60,6 +60,10 @@ jobs:
           [vars]
           version = 18.0
 
+          [virtualenv]
+          requirements =
+            lxml>=6
+
           [odoo]
           version = \${vars:version}
 
@@ -75,34 +79,36 @@ jobs:
           cat odoo-project.ini
 
       - name: Create workspace root
-        run: mkdir -p odoo-minimal
+        run: mkdir -p odoo-workspace
 
-      - name: Provision minimal Odoo workspace
+      - name: Provision Odoo workspace
         run: |
           uv run odt-env ./odoo-project.ini \
             --sync-all \
             --create-venv \
-            --root odoo-minimal \
-            -e version=19.0
+            --root odoo-workspace
 
       - name: Check generated scripts
         run: |
-          test -x odoo-minimal/odoo-scripts/initdb.sh
-          ls -la odoo-minimal/odoo-scripts
+          test -x odoo-workspace/odoo-scripts/initdb.sh
+          ls -la odoo-workspace/odoo-scripts
 
       - name: Init database
-        working-directory: odoo-minimal
+        working-directory: odoo-workspace
         run: ./odoo-scripts/initdb.sh
 
       - name: Update addons
-        working-directory: odoo-minimal
+        working-directory: odoo-workspace
         run: ./odoo-scripts/update.sh
 
       - name: Show generated workspace
         if: always()
         run: |
           echo "Workspace tree:"
-          find odoo-minimal -maxdepth 2 | sort
+          find odoo-workspace -maxdepth 2 | sort
           echo
           echo "Configs:"
-          ls -la odoo-minimal/odoo-configs || true
+          ls -la odoo-workspace/odoo-configs || true
+          echo
+          echo "Odoo config odoo-server.conf:"
+          cat odoo-workspace/odoo-configs/odoo-server.conf || true
