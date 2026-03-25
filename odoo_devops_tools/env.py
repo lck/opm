@@ -2211,6 +2211,8 @@ def sync_project(
                 "--no-deps",
                 "--no-build-isolation",
                 "-e", str(layout.odoo_dir),
+                # Legacy editable install of odoo
+                "--config-settings", "editable_mode=compat",
             ]
             p = subprocess.run(
                 cmd,
