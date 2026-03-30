@@ -1,18 +1,12 @@
 # odoo-devops-tools
 
-A small set of DevOps utilities for **local Odoo development** and **simple Odoo deployments**.
+A small set of utilities for **local Odoo development** and **simple Odoo deployments**.
 
 The main entry point is **`odt-env`**, a CLI that provisions an Odoo workspace from a **single project file**.
 
-## Main features
-
-- **Clone and update** Odoo and addon repositories
-- **Provision** a Python virtual environment and automatically install Python dependencies from addons
-- **Generate** helper scripts for running, testing, updating, shell access, database initialization, backup, and restore
-
 ---
 
-## Requirements
+## System requirements
 
 - **git**: https://git-scm.com/install/
 - **uv** (Python package & project manager): https://docs.astral.sh/uv/getting-started/installation/
@@ -33,27 +27,9 @@ Or using `uv`:
 uv tool install --reinstall odoo-devops-tools
 ```
 
-Verify:
-
-```bash
-odt-env --help
-```
-
 ---
 
 ## Usage
-
-> All examples assume that PostgreSQL is running on `127.0.0.1`, listening on the default port `5432` and that PostgreSQL role `odoo` already exists.
-> 
-> If your setup is different, update the relevant db_* settings in the project file:
->
-> ```ini
-> [config]
-> db_host = 127.0.0.1
-> db_port = 5432
-> db_user = odoo
-> db_password = odoo
-> ```
 
 ### 1. Minimal example
 
