@@ -510,7 +510,6 @@ Examples:
 ```bash
 ./odoo-scripts/run.sh
 ./odoo-scripts/run.sh --dev=all
-./odoo-scripts/run.sh -i sale,stock --stop-after-init
 ```
 
 ### instance
@@ -523,9 +522,8 @@ Examples:
 
 ```bash
 ./odoo-scripts/instance.sh start
-./odoo-scripts/instance.sh start --dev=all
-./odoo-scripts/instance.sh restart
 ./odoo-scripts/instance.sh stop
+./odoo-scripts/instance.sh restart
 ./odoo-scripts/instance.sh status
 ```
 
@@ -540,8 +538,8 @@ Any extra arguments are forwarded to the underlying command `odoo-bin`.
 Examples:
 
 ```bash
+./odoo-scripts/test.sh
 ./odoo-scripts/test.sh -i sale --test-tags /sale
-./odoo-scripts/test.sh --test-tags /web
 ```
 
 ### shell
@@ -560,13 +558,12 @@ Creates or initializes an Odoo database.
 
 The script always adds `--no-demo --no-cache --unless-exists -n <db_name>`.
 
-Any extra arguments are forwarded to the underlying command `click-odoo-initdb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/) package.
+Any extra arguments are forwarded to the underlying command `click-odoo-initdb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/#click-odoo-initdb-stable) package.
 
 Examples:
 
 ```bash
 ./odoo-scripts/initdb.sh
-./odoo-scripts/initdb.sh -m base
 ./odoo-scripts/initdb.sh -m sale,crm
 ```
 
@@ -574,7 +571,7 @@ Examples:
 
 Creates a timestamped ZIP backup under `ROOT/odoo-backups/`.
 
-Any extra arguments are forwarded to the underlying command `click-odoo-backupdb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/) package.
+Any extra arguments are forwarded to the underlying command `click-odoo-backupdb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/#click-odoo-backupdb-beta) package.
 
 Examples:
 
@@ -588,7 +585,7 @@ Restores a backup into the configured database.
 
 The script always adds `--copy --neutralize`.
 
-Any extra arguments are forwarded to the underlying command `click-odoo-restoredb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/) package.
+Any extra arguments are forwarded to the underlying command `click-odoo-restoredb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/#click-odoo-restoredb-beta) package.
 
 Examples:
 
@@ -601,7 +598,7 @@ Examples:
 
 Updates an Odoo database automatically detecting addons to update based on a hash of their file content.
 
-Any extra arguments are forwarded to the underlying command `click-odoo-update` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/) package.
+Any extra arguments are forwarded to the underlying command `click-odoo-update` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/#click-odoo-update-stable) package.
 
 Examples:
 
