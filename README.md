@@ -82,7 +82,6 @@ ROOT/
 │   ├── instance.sh       # manage Odoo as a background service (start|stop|restart|status)
 │   ├── test.sh           # run Odoo tests
 │   ├── shell.sh          # open an Odoo shell
-│   ├── initdb.sh         # initialize the configured database
 │   ├── backup.sh         # create a timestamped ZIP backup in ROOT/odoo-backups/
 │   ├── restore.sh        # restore a backup into the configured database
 │   ├── update.sh         # update modules, auto-detecting addons to update using file-content hashes stored in the DB
@@ -90,15 +89,9 @@ ROOT/
 └── wheelhouse/           # wheelhouse for offline installs
 ```
 
-#### 1.3. Initialize database and start Odoo
+#### 1.3. Start Odoo
 
-When the workspace is ready, initialize Odoo database:
-
-```bash
-./odoo-scripts/initdb.sh
-```
-
-Then start Odoo:
+When the workspace is ready, start Odoo:
 
 ```bash
 ./odoo-scripts/run.sh
@@ -107,7 +100,6 @@ Then start Odoo:
 On Windows, use the `.bat` variants instead:
 
 ```bat
-odoo-scripts\initdb.bat
 odoo-scripts\run.bat
 ```
 
@@ -509,6 +501,7 @@ Examples:
 
 ```bash
 ./odoo-scripts/run.sh
+./odoo-scripts/run.sh -i sale,crm
 ./odoo-scripts/run.sh --dev=all
 ```
 
@@ -550,21 +543,6 @@ Examples:
 
 ```bash
 ./odoo-scripts/shell.sh
-```
-
-### initdb
-
-Creates or initializes an Odoo database.
-
-The script always adds `--no-demo --no-cache --unless-exists -n <db_name>`.
-
-Any extra arguments are forwarded to the underlying command `click-odoo-initdb` from [`click-odoo-contrib`](https://pypi.org/project/click-odoo-contrib/#click-odoo-initdb-stable) package.
-
-Examples:
-
-```bash
-./odoo-scripts/initdb.sh
-./odoo-scripts/initdb.sh -m sale,crm
 ```
 
 ### backup

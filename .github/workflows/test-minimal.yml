@@ -90,12 +90,12 @@ jobs:
 
       - name: Check generated scripts
         run: |
-          test -x odoo-workspace/odoo-scripts/initdb.sh
+          test -x odoo-workspace/odoo-scripts/run.sh
           ls -la odoo-workspace/odoo-scripts
 
       - name: Init database
         working-directory: odoo-workspace
-        run: ./odoo-scripts/initdb.sh
+        run: ./odoo-scripts/run.sh --stop-after-init
 
       - name: Update addons
         working-directory: odoo-workspace

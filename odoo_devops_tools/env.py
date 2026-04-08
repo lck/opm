@@ -1559,79 +1559,6 @@ endlocal
     layout.script("shell", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
 
 
-def write_initdb_sh(layout: Layout, db_name: str) -> None:
-    content = f"""#!/usr/bin/env bash
-set -euo pipefail
-
-# Resolve script directory
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-ROOT_DIR="$(cd "${{SCRIPT_DIR}}/.." && pwd)"
-
-VENV_DIR="${{ROOT_DIR}}/venv"
-INITDB_BIN="${{VENV_DIR}}/bin/click-odoo-initdb"
-CONF="${{ROOT_DIR}}/odoo-configs/odoo-server.conf"
-
-if [[ ! -d "${{VENV_DIR}}" ]]; then
-  echo "ERROR: required venv directory not found at ${{VENV_DIR}}" >&2
-  exit 1
-fi
-if [[ ! -x "${{INITDB_BIN}}" ]]; then
-  echo "ERROR: click-odoo-initdb not found/executable at ${{INITDB_BIN}}" >&2
-  exit 1
-fi
-if [[ ! -f "${{CONF}}" ]]; then
-  echo "ERROR: Odoo config not found at ${{CONF}}" >&2
-  exit 1
-fi
-
-echo "INFO: Initializing Odoo database '{db_name}' (unless exists; no demo; no cache) using config ${{CONF}}. Passing through any extra arguments."
-exec "${{INITDB_BIN}}" -c "${{CONF}}" --no-demo --no-cache --unless-exists --log-level debug -n "{db_name}" "$@"
-"""
-    layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.script("initdb", "sh").write_text(content, encoding="utf-8")
-
-    try:
-        mode = layout.script("initdb", "sh").stat().st_mode
-        layout.script("initdb", "sh").chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except OSError:
-        pass
-
-
-def write_initdb_bat(layout: Layout, db_name: str) -> None:
-    content = rf"""@echo off
-setlocal enabledelayedexpansion
-
-REM Resolve ROOT directory (parent of this script directory)
-set SCRIPT_DIR=%~dp0
-if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
-for %%I in ("%SCRIPT_DIR%\..") do set ROOT_DIR=%%~fI
-
-set VENV_DIR=%ROOT_DIR%\venv
-set INITDB_BIN=%VENV_DIR%\Scripts\click-odoo-initdb.exe
-set CONF=%ROOT_DIR%\odoo-configs\odoo-server.conf
-
-if not exist "%VENV_DIR%" (
-  echo ERROR: required venv directory not found at %VENV_DIR%
-  exit /b 1
-)
-if not exist "%INITDB_BIN%" (
-  echo ERROR: click-odoo-initdb not found at %INITDB_BIN%
-  exit /b 1
-)
-if not exist "%CONF%" (
-  echo ERROR: Odoo config not found at %CONF%
-  exit /b 1
-)
-
-echo INFO: Initializing Odoo database "{db_name}" (unless exists; no demo; no cache) using config %CONF%. Passing through any extra arguments.
-"%INITDB_BIN%" -c "%CONF%" --no-demo --no-cache --unless-exists --log-level debug -n "{db_name}" %*
-
-endlocal
-"""
-    layout.scripts_dir.mkdir(parents=True, exist_ok=True)
-    layout.script("initdb", "bat").write_text(content.replace("\n", "\r\n"), encoding="utf-8")
-
-
 def write_backup_sh(layout: Layout, db_name: str) -> None:
     content = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -2240,15 +2167,13 @@ def sync_project(
         if not isinstance(db_name, str) or not db_name.strip():
             _logger.warning(
                 "Missing or invalid 'db_name' in [config] (expected non-empty string)."
-                "Database scripts (initdb/backup/restore/restore-force) will NOT be generated."
+                "Database scripts (backup/restore/restore-force) will NOT be generated."
             )
         else:
             if is_windows:
-                write_initdb_bat(layout, db_name.strip())
                 write_backup_bat(layout, db_name.strip())
                 write_restore_bat(layout, db_name.strip())
             else:
-                write_initdb_sh(layout, db_name.strip())
                 write_backup_sh(layout, db_name.strip())
                 write_restore_sh(layout, db_name.strip())
     else:
@@ -2308,7 +2233,6 @@ def sync_project(
             print(f"  - run:              {layout.script("run", "bat")}")
             print(f"  - test:             {layout.script("test", "bat")}")
             print(f"  - shell:            {layout.script("shell", "bat")}")
-            print(f"  - initdb:           {layout.script("initdb", "bat")}")
             print(f"  - backup:           {layout.script("backup", "bat")}")
             print(f"  - restore:          {layout.script("restore", "bat")}")
             print(f"  - update:           {layout.script("update", "bat")}")
@@ -2316,7 +2240,6 @@ def sync_project(
             print(f"  - run:              {layout.script("run", "sh")}")
             print(f"  - test:             {layout.script("test", "sh")}")
             print(f"  - shell:            {layout.script("shell", "sh")}")
-            print(f"  - initdb:           {layout.script("initdb", "sh")}")
             print(f"  - backup:           {layout.script("backup", "sh")}")
             print(f"  - restore:          {layout.script("restore", "sh")}")
             print(f"  - update:           {layout.script("update", "sh")}")

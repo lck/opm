@@ -98,7 +98,7 @@ jobs:
 
       - name: Check generated scripts and folders
         run: |
-          test -x odoo-workspace/odoo-scripts/initdb.sh
+          test -x odoo-workspace/odoo-scripts/run.sh
           test -x odoo-workspace/odoo-scripts/update.sh
           test -d odoo-workspace/odoo-addons/oca-web
           test -d odoo-workspace/odoo-addons/oca-helpdesk
@@ -107,7 +107,7 @@ jobs:
 
       - name: Init database with OCA addons
         working-directory: odoo-workspace
-        run: ./odoo-scripts/initdb.sh -m web_notify,helpdesk_mgmt
+        run: ./odoo-scripts/run.sh -i web_notify,helpdesk_mgmt --stop-after-init
 
       - name: Verify OCA addons installed in database
         env:
