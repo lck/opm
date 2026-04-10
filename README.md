@@ -44,10 +44,6 @@ Create a file named `odoo-project.ini`.
 > The project file can have a different name.
 
 ```ini
-[virtualenv]
-requirements =
-  lxml>=6
-
 [odoo]
 version = 18.0
 
@@ -120,10 +116,6 @@ In this example, we add two addon repositories, `OCA/web` and `OCA/helpdesk`, an
 Add the extra addons to the `odoo-project.ini` file.
 
 ```ini
-[virtualenv]
-requirements =
-  lxml>=6
-
 [odoo]
 version = 18.0
 
@@ -250,6 +242,15 @@ python_version = 3.11
 managed_python = false
 requirements =
   lxml>=6
+
+[odoo]
+version = 18.0
+
+[config]
+db_host = 127.0.0.1
+db_name = odoo
+db_user = odoo
+db_password = odoo
 ```
 
 #### 3.2. Update the workspace
@@ -501,8 +502,8 @@ Examples:
 
 ```bash
 ./odoo-scripts/run.sh
-./odoo-scripts/run.sh -i sale,crm
 ./odoo-scripts/run.sh --dev=all
+./odoo-scripts/run.sh -i sale,crm --without-demo=all
 ```
 
 ### instance

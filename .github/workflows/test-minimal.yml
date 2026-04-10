@@ -57,15 +57,8 @@ jobs:
         shell: bash
         run: |
           cat > odoo-project.ini <<EOF
-          [vars]
-          version = 18.0
-
-          [virtualenv]
-          requirements =
-            lxml>=6
-
           [odoo]
-          version = \${vars:version}
+          version = 18.0
 
           [config]
           db_host = 127.0.0.1
