@@ -238,10 +238,8 @@ Disable managed Python by adding `python_version = 3.11` and `managed_python = f
 
 ```ini
 [virtualenv]
-python_version = 3.11
 managed_python = false
-requirements =
-  lxml>=6
+python_version = 3.11
 
 [odoo]
 version = 18.0
@@ -265,7 +263,67 @@ This recreates the virtual environment at `ROOT/venv` using the system Python.
 
 ---
 
-### 4. Simple offline deployment using a prebuilt wheelhouse
+### 4. Managing Python requirements
+
+The `[virtualenv]` section can be used to add new Python packages, pin specific versions, and override packages collected from Odoo or addon repository `requirements.txt` files.
+
+Use:
+
+- `requirements` to add extra packages or pin an explicit version
+- `requirements_ignore` to skip packages that would otherwise be collected from repository requirements files
+
+When a package is listed in `requirements`, `odt-env` automatically gives that package priority by ignoring the same package name from collected repository requirements. This means you can usually pin a package version just by adding it to `requirements`.
+
+#### 4.1. Add or pin packages
+
+Use `requirements` to install additional packages or to force a specific version:
+
+```ini
+[virtualenv]
+requirements =
+  requests==2.32.3
+  boto3==1.35.99
+
+[odoo]
+version = 18.0
+
+[config]
+db_host = 127.0.0.1
+db_name = odoo
+db_user = odoo
+db_password = odoo
+```
+
+In this example, both packages are added to the virtual environment and pinned to the specified versions.
+
+#### 4.2. Override a package with a different one
+
+If you want to replace a package with a different distribution name, add the replacement to `requirements` and skip the original package with `requirements_ignore`.
+
+Example:
+
+```ini
+[virtualenv]
+requirements =
+  psycopg2-binary==2.9.9
+requirements_ignore =
+  psycopg2
+
+[odoo]
+version = 18.0
+
+[config]
+db_host = 127.0.0.1
+db_name = odoo
+db_user = odoo
+db_password = odoo
+```
+
+In this example, `odt-env` installs `psycopg2-binary==2.9.9` and skips `psycopg2` when collecting repository requirements.
+
+---
+
+### 5. Simple offline deployment using a prebuilt wheelhouse
 
 This example shows a simple deployment workflow:
 
@@ -273,7 +331,7 @@ This example shows a simple deployment workflow:
 2. Copy the prepared workspace to the target machine.
 3. On the target machine, recreate the virtual environment strictly offline from the existing wheelhouse.
 
-#### 4.1. Prepare the workspace on the build machine
+#### 5.1. Prepare the workspace on the build machine
 
 On the build machine, run `odt-env` normally:
 
@@ -285,7 +343,7 @@ This syncs Odoo and addon repositories, resolves and locks Python dependencies, 
 
 After that, transfer the prepared workspace to the target machine. The simplest approach is to copy the entire `ROOT/` directory.
 
-#### 4.2. Recreate the virtual environment on the target machine
+#### 5.2. Recreate the virtual environment on the target machine
 
 On the target machine, run:
 
@@ -397,15 +455,13 @@ Example:
 
 ```ini
 [virtualenv]
-python_version = 3.11
 managed_python = false
-build_constraints =
-  setuptools<82
+python_version = 3.11
 requirements =
   lxml>=6
-  requests
+  psycopg2-binary==2.9.9
 requirements_ignore =
-  babel
+  psycopg2
 ```
 
 ### `[odoo]`
